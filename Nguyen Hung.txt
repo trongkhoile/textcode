@@ -1,0 +1,88 @@
+#property strict
+#include <Trade/Trade.mqh>
+CTrade trade;
+double myTP, mySL;
+input string FileName = "signals.txt";   // file chứa tín hiệu từ TradingView
+input double Lots = 0.01;                 // 👉 Lot tùy chỉnh (bạn chỉnh trực tiếp trong EA)
+input double TP_Pips = 1.5;              // TP cách giá 1.5 giá
+input double SL_Pips = 3;              // SL cách giá 3 giá
+//=== Hàm xóa khoảng trắng đầu/cuối ===
+string Trim(string s)
+{
+   StringTrimLeft(s);
+   StringTrimRight(s);
+   return s;
+}
+
+//=== Hàm lấy giá trị trong JSON theo key ===
+string GetJsonValue(string json, string key)
+{
+   int p = StringFind(json, "\"" + key + "\"");
+   if(p == -1) return "";
+   int colon = StringFind(json, ":", p);
+   if(colon == -1) return "";
+   int comma = StringFind(json, ",", colon);
+   if(comma == -1) comma = StringFind(json, "}", colon);
+   if(comma == -1) return "";
+   string val = StringSubstr(json, colon+1, comma - colon - 1);
+   StringReplace(val, "\"", "");
+   val = Trim(val);
+   return val;
+}
+
+//=== Hàm xử lý tín hiệu JSON ===
+void ProcessSignal(string json)
+{
+   Print("Nội dung tín hiệu: ", json);
+
+   string action = GetJsonValue(json, "ACTION");
+   string symbol = GetJsonValue(json, "SYMBOL");  // lấy symbol từ JSON
+
+   // 👉 Check symbol trùng với chart đang chạy
+   if(symbol != "" && symbol != _Symbol && _Symbol != "XAUUSD.sc" && _Symbol != "XAUUSD.c" && _Symbol != "XAUUSD.c" && _Symbol != "XAUUSD.vxc" && _Symbol != "XAUUSDcent")
+   {
+      Print("⚠️ Bỏ qua tín hiệu vì SYMBOL=", symbol, " không khớp với chart: ", _Symbol);
+      return;
+   }
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   myTP = TP_Pips;
+   mySL = SL_Pips;    
+   if(action == "BUY")
+   {
+      Print("==> Nhận tín hiệu BUY trên ", _Symbol, " LOT=", Lots, " TP=", ask - mySL, " SL=", ask + myTP);
+      trade.Buy(Lots, _Symbol, 0, ask - mySL, ask + myTP, "TV Buy");
+   }
+   else if(action == "SELL")
+   {
+      Print("==> Nhận tín hiệu SELL trên ", _Symbol, " LOT=", Lots, " TP=", bid + mySL, " SL=", bid - myTP);
+      trade.Sell(Lots, _Symbol, 0,bid + mySL, bid - myTP, "TV Sell");
+   }
+}
+
+//=== OnTick đọc file tín hiệu ===
+void OnTick()
+{
+   int handle = FileOpen(FileName, FILE_READ|FILE_TXT|FILE_SHARE_READ|FILE_ANSI);
+   if(handle != INVALID_HANDLE)
+   {
+      string line;
+      while(!FileIsEnding(handle))
+      {
+         line = FileReadString(handle);
+         if(line != "")
+         {
+            ProcessSignal(line);
+         }
+      }
+      FileClose(handle);
+      
+      // Xóa nội dung file sau khi xử lý để tránh nhồi lệnh
+      int clear = FileOpen(FileName, FILE_WRITE|FILE_TXT);
+      if(clear != INVALID_HANDLE)
+      {
+         FileWrite(clear, "");
+         FileClose(clear);
+      }
+   }
+}

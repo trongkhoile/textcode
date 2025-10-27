@@ -1,0 +1,1 @@
+{"ACTION": "{{strategy.order.action}}","SYMBOL": "{{ticker}}"}

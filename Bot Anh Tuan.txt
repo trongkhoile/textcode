@@ -1,0 +1,200 @@
+#include <Trade/Trade.mqh>
+
+CTrade trade;
+
+//=== Cấu hình cơ bản ===//
+input int Chaymotchieu = 0; // 0 = chỉ BUY, 1 = chỉ SELL, 2 = cả hai
+input double Lots = 0.01;
+input double TP_Pips = 80;
+input double SL_Pips = 25;
+input double BuyStart = 50;//khoảng rsi,stoch của phe buy bắt đầu
+input double BuyEnd = 80;//khoảng rsi,stoch của phe sell kết thúc
+input double SellStart = 20;//khoảng rsi,stoch của phe sell bắt đầu
+input double SellEnd = 50;//khoảng rsi,stoch của phe sell kết thúc
+input double ADX_Min = 20; //khoảng adx >=
+input int FastEMA = 50;
+input int SlowEMA = 100;
+input int RSI_Period = 7;
+input int K_Period = 7;      // Stoch %K period
+input int D_Period = 3;      // Stoch %D period
+input int Slowing = 3;       // Stoch slowing
+input int ADX_Period = 14;       // ✅ thêm ADX
+input ENUM_TIMEFRAMES TimeFrame = PERIOD_CURRENT;
+input ulong MagicNumber = 123456;   // ✅ thêm MagicNumber để quản lý lệnh
+
+//=== Handle cho EMA / RSI / Stoch ===//
+int fastEMA_handle;
+int slowEMA_handle;
+int rsi_handle;
+int stoch_handle;
+int adx_handle;  //
+datetime lastBarTime = 0;
+
+//=== Khởi tạo EA ===//
+
+int OnInit()
+{
+    trade.SetExpertMagicNumber(123456);
+
+    fastEMA_handle = iMA(_Symbol, TimeFrame, FastEMA, 0, MODE_EMA, PRICE_CLOSE);
+    slowEMA_handle = iMA(_Symbol, TimeFrame, SlowEMA, 0, MODE_EMA, PRICE_CLOSE);
+    rsi_handle     = iRSI(_Symbol, TimeFrame, RSI_Period, PRICE_CLOSE);
+    stoch_handle   = iStochastic(_Symbol, TimeFrame, K_Period, D_Period, Slowing, MODE_SMA, 0);
+    adx_handle     = iADX(_Symbol, TimeFrame, ADX_Period);  // ✅ tạo handle ADX
+    if(fastEMA_handle == INVALID_HANDLE || slowEMA_handle == INVALID_HANDLE || 
+       rsi_handle == INVALID_HANDLE || stoch_handle == INVALID_HANDLE || adx_handle == INVALID_HANDLE)
+    {
+        Print("❌ Lỗi tạo handle EMA / RSI / Stoch / ADX");
+        return(INIT_FAILED);
+    }
+
+    Print("✅ EA EMA Cross + RSI + Stoch + ADX đã khởi động thành công!");
+    return(INIT_SUCCEEDED);
+}
+
+//=== Đóng lệnh ngược chiều ===//
+void CloseAllPositions(int direction) // 1 = Buy, -1 = Sell
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(PositionGetSymbol(i) != _Symbol) continue;
+
+      long type = PositionGetInteger(POSITION_TYPE);
+      ulong ticket = PositionGetInteger(POSITION_TICKET);
+
+      if((direction == 1 && type == POSITION_TYPE_SELL) || 
+         (direction == -1 && type == POSITION_TYPE_BUY))
+      {
+         trade.PositionClose(_Symbol);
+         Print("⚠️ Đóng lệnh ngược chiều #", ticket);
+      }
+   }
+}
+
+bool HasAnyMyOrder(ulong magic)
+{
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      string pos_symbol = PositionGetSymbol(i);
+      if(PositionSelect(pos_symbol))
+      {
+         long mg = PositionGetInteger(POSITION_MAGIC);
+         if(mg == (long)magic)
+            return true;
+      }
+   }
+   return false;
+}
+//=== Hàm OnTick ===//
+void OnTick()
+{
+    if(PositionSelect(_Symbol))
+    {
+       long type = PositionGetInteger(POSITION_TYPE);
+       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+       double sl = PositionGetDouble(POSITION_SL);
+       double currentPrice = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                                                         : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   
+       double profitPips;
+       double pipValue = (_Digits == 3 || _Digits == 5) ? 10 * _Point : _Point;
+   
+       if(type == POSITION_TYPE_BUY)
+           profitPips = (currentPrice - openPrice) / pipValue;
+       else
+           profitPips = (openPrice - currentPrice) / pipValue;
+   
+       if(profitPips >= 25) // đạt 25 pip lợi nhuận
+       {
+           double newSL = openPrice; // dịch SL về hòa vốn
+           // chỉ dịch nếu SL chưa vượt openPrice
+           if((type == POSITION_TYPE_BUY && sl < newSL) || (type == POSITION_TYPE_SELL && sl > newSL))
+           {
+               if(!trade.PositionModify(_Symbol, newSL, PositionGetDouble(POSITION_TP)))
+                   Print("❌ Dời SL về BE thất bại: ", _LastError);
+               else
+                   Print("✅ Dời SL về BE tại ", DoubleToString(newSL, _Digits));
+           }
+       }
+    }
+    datetime currentBarTime = iTime(_Symbol, TimeFrame, 0);
+    if(currentBarTime == lastBarTime) return; // chỉ chạy khi sang nến mới
+    lastBarTime = currentBarTime;
+    
+    if(PositionSelect(_Symbol))
+      return; // bỏ qua vì đã có lệnh mở
+    // ✅ Kiểm tra nếu đã có lệnh mở thì bỏ qua tick này
+    double emaFast[2], emaSlow[2], rsi[2];
+    double stochK[1], stochD[1], adx[1];
+
+    CopyBuffer(fastEMA_handle, 0, 1, 2, emaFast);
+    CopyBuffer(slowEMA_handle, 0, 1, 2, emaSlow);
+    CopyBuffer(rsi_handle, 0, 1, 1, rsi);
+    CopyBuffer(stoch_handle, 0, 1, 1, stochK);
+    CopyBuffer(stoch_handle, 1, 1, 1, stochD);
+    CopyBuffer(adx_handle, 0, 1, 1, adx);
+    
+    double prevFast = emaFast[0];
+    double prevSlow = emaSlow[0];
+    double prev2Fast = emaFast[1];
+    double prev2Slow = emaSlow[1];
+    double rsiPrev = rsi[0];
+    double stochK_prev = stochK[0];
+    double stochD_prev = stochD[0];
+    double adxPrev = adx[0];
+    
+    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+    double sl, tp;
+    double pipValue = (_Digits == 3 || _Digits == 5) ? 10 * _Point : _Point;   
+    
+    // === BUY nếu EMA 50 cắt lên EMA 100 và điều kiện RSI/Stoch thỏa ===
+    if(prev2Fast > prev2Slow && prevFast < prevSlow && (rsiPrev >= BuyStart && rsiPrev <= BuyEnd) && (stochK_prev >= BuyStart && stochK_prev <= BuyEnd) && adxPrev >= ADX_Min && (Chaymotchieu == 0 || Chaymotchieu == 2))
+    {
+        CloseAllPositions(1); 
+        sl = NormalizeDouble(ask - SL_Pips*pipValue, _Digits);
+        tp = NormalizeDouble(ask + TP_Pips*pipValue, _Digits);
+
+        if(trade.Buy(Lots, _Symbol, 0, sl, tp))
+            Print("🟢 Buy tại mở nến mới, giá ", ask, " SL=", sl, " TP=", tp);
+        else
+            Print("❌ Buy thất bại: ", _LastError);
+    }
+
+    // === SELL nếu EMA 50 cắt xuống EMA 100 và điều kiện RSI/Stoch thỏa ===
+    if(prev2Fast < prev2Slow && prevFast > prevSlow && (rsiPrev >= SellStart && rsiPrev <= SellEnd) && (stochK_prev >= SellStart && stochK_prev <= SellEnd) && adxPrev >= ADX_Min && (Chaymotchieu == 0 || Chaymotchieu == 2))
+    {
+        CloseAllPositions(-1); 
+        sl = NormalizeDouble(bid + SL_Pips*pipValue, _Digits);
+        tp = NormalizeDouble(bid - TP_Pips*pipValue, _Digits);
+
+        if(trade.Sell(Lots, _Symbol, 0, sl, tp))
+            Print("🔴 Sell tại mở nến mới, giá ", bid, " SL=", sl, " TP=", tp);
+        else
+            Print("❌ Sell thất bại: ", _LastError);
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

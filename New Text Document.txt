@@ -1,0 +1,330 @@
+#property strict
+#include <Trade/Trade.mqh>
+CTrade trade;
+CPositionInfo m_position;
+double myTP, mySL;
+input string FileName = "signals.txt";   // file chứa tín hiệu từ TradingView
+input double Lots = 0.1;                 // Lot tùy chỉnh
+input double TP_Pips = 1.5;              // TP cách giá 1.5 giá
+input double SL_Pips = 3;              // SL cách giá 3 giá
+int check = 0;
+double LastBalance = 0;
+//=== Hàm xóa khoảng trắng đầu/cuối ===
+string Trim(string s)
+{
+   StringTrimLeft(s);
+   StringTrimRight(s);
+   return s;
+}
+int OnInit()
+{
+    // Lấy số dư hiện tại khi EA bắt đầu chạy
+    LastBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    return(INIT_SUCCEEDED);
+}
+
+// Hàm kiểm tra thay đổi số dư
+bool CheckBalanceChange()
+{
+    double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    if(currentBalance > LastBalance){
+        Print("💰 Số dư tăng: ", currentBalance - LastBalance);
+        LastBalance = currentBalance;
+        return true;
+    }
+    else if(currentBalance < LastBalance){
+        Print("💸 Số dư giảm: ", LastBalance - currentBalance);
+        LastBalance = currentBalance;
+        return false;
+    }
+    else{
+        LastBalance = currentBalance;
+        Print("Số dư không thay đổi");
+        return true;
+    }
+  // cập nhật cho lần sau
+}
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+{
+    // Kiểm tra nếu deal mới được thêm (lệnh vừa khớp hoặc đóng)
+    Print(check);
+    if (PositionsTotal() != 0){
+      LastBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    }
+    if(trans.type == TRADE_TRANSACTION_DEAL_ADD && PositionsTotal() == 0)
+    {
+        if (CheckBalanceChange() == false){
+            check += 1;
+        }
+        else if (CheckBalanceChange() == true || check >= 5){
+            check = 0;
+        }
+    }
+}
+bool IsNoPositionForSymbol(string symbol)
+{
+    for(int i=0; i<PositionsTotal(); i++)
+    {
+        if (PositionGetSymbol(i) == symbol)
+            return false; // có lệnh cho symbol này
+    }
+    return true; // không có lệnh nào cho symbol này
+}
+
+bool CheckLastClosed()
+{
+   int total = HistoryDealsTotal();
+   if(total == 0) 
+   {
+       Print("Không có lệnh lịch sử nào");
+       return false; // phải trả về bool
+   }
+
+   ulong last_deal = HistoryDealGetTicket(total - 1);
+   if(HistoryDealSelect(last_deal))
+   {
+      long reason = HistoryDealGetInteger(last_deal, DEAL_REASON);
+      string sym  = HistoryDealGetString(last_deal, DEAL_SYMBOL);
+      double price = HistoryDealGetDouble(last_deal, DEAL_PRICE);
+
+      if(reason == DEAL_REASON_TP)
+      {
+         Print("✅ Lệnh ", sym, " vừa TP tại ", price);
+         return true;  // trả về true nếu TP
+      }
+      else if(reason == DEAL_REASON_SL)
+      {
+         Print("❌ Lệnh ", sym, " vừa SL tại ", price);
+         return false; // trả về false nếu SL
+      }
+      else
+      {
+         Print("ℹ️ Lệnh ", sym, " đóng vì lý do khác: ", reason);
+         return false; // hoặc true tùy ý bạn
+      }
+   }
+
+   return false; // trường hợp không select được deal
+}
+
+//=== Hàm xóa tất cả lệnh chờ của symbol ===
+bool DeletePendingOrders(string symbol)
+{
+   bool deleted = false;
+   int total = OrdersTotal();
+
+   for(int i = total - 1; i >= 0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(OrderSelect(ticket))
+      {
+         string sym = OrderGetString(ORDER_SYMBOL);
+         long type  = OrderGetInteger(ORDER_TYPE);
+
+         // Xóa nếu là lệnh chờ
+         if(sym == symbol &&
+            (type == ORDER_TYPE_BUY_LIMIT  ||
+             type == ORDER_TYPE_SELL_LIMIT ||
+             type == ORDER_TYPE_BUY_STOP   ||
+             type == ORDER_TYPE_SELL_STOP))
+         {
+            if(trade.OrderDelete(ticket))
+            {
+               Print("🧹 Đã xóa lệnh chờ cũ: ", ticket, " (", sym, ")");
+               deleted = true;
+            }
+            else
+            {
+               Print("⚠️ Lỗi khi xóa lệnh chờ ", ticket, ": ", _LastError);
+            }
+         }
+      }
+   }
+   return deleted;
+}
+bool DeletePendingBuyStop(string symbol)
+{
+    bool deleted = false;
+    int total = OrdersTotal();
+
+    for(int i = total - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(OrderSelect(ticket))
+        {
+            string sym = OrderGetString(ORDER_SYMBOL);
+            long type  = OrderGetInteger(ORDER_TYPE);
+
+            // Xóa chỉ nếu là lệnh Buy Stop
+            if(sym == symbol && type == ORDER_TYPE_BUY_STOP)
+            {
+                if(trade.OrderDelete(ticket))
+                {
+                    Print("🧹 Đã xóa lệnh Buy Stop cũ: ", ticket, " (", sym, ")");
+                    deleted = true;
+                }
+                else
+                {
+                    Print("⚠️ Lỗi khi xóa lệnh Buy Stop ", ticket, ": ", _LastError);
+                }
+            }
+        }
+    }
+    return deleted;
+}
+bool DeletePendingSellStop(string symbol)
+{
+    bool deleted = false;
+    int total = OrdersTotal();
+
+    for(int i = total - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(OrderSelect(ticket))
+        {
+            string sym = OrderGetString(ORDER_SYMBOL);
+            long type  = OrderGetInteger(ORDER_TYPE);
+
+            // Xóa chỉ nếu là lệnh Sell Stop
+            if(sym == symbol && type == ORDER_TYPE_SELL_STOP)
+            {
+                if(trade.OrderDelete(ticket))
+                {
+                    Print("🧹 Đã xóa lệnh Sell Stop cũ: ", ticket, " (", sym, ")");
+                    deleted = true;
+                }
+                else
+                {
+                    Print("⚠️ Lỗi khi xóa lệnh Sell Stop ", ticket, ": ", _LastError);
+                }
+            }
+        }
+    }
+    return deleted;
+}
+
+string GetJsonValue(string json, string key)
+{
+   int p = StringFind(json, "\"" + key + "\"");
+   if(p == -1) return "";
+   int colon = StringFind(json, ":", p);
+   if(colon == -1) return "";
+   int comma = StringFind(json, ",", colon);
+   if(comma == -1) comma = StringFind(json, "}", colon);
+   if(comma == -1) return "";
+   string val = StringSubstr(json, colon+1, comma - colon - 1);
+   StringReplace(val, "\"", "");
+   val = Trim(val);
+   return val;
+}
+void CloseAllOrders()
+{
+   int total = PositionsTotal();
+   for(int i = total-1; i >= 0; i--)
+   {
+      if(m_position.SelectByIndex(i))
+      {
+         string sym   = m_position.Symbol();
+         ulong  ticket= m_position.Ticket();
+         double volume= m_position.Volume();
+
+         if(sym == _Symbol)
+         {
+            Print("🔻 Đóng lệnh ticket=", ticket, " vol=", volume);
+
+            // MT5 Hedging → đóng từng lệnh
+            if(!trade.PositionClosePartial(ticket, volume))
+            {
+               Print("❌ Lỗi đóng ticket=", ticket,
+                     " code=", GetLastError());
+            }
+         }
+      }
+   }
+}
+
+//=== Xử lý tín hiệu JSON ===
+void ProcessSignal(string json)
+{
+   Print("📩 Nhận tín hiệu: ", json);
+   
+   string action = GetJsonValue(json, "ACTION");
+   string symbol = GetJsonValue(json, "SYMBOL");
+   double price  = StringToDouble(GetJsonValue(json, "PRICE"));
+
+   if(symbol != "" && symbol != _Symbol)
+   {
+      Print("⚠️ Bỏ qua tín hiệu vì SYMBOL=", symbol, " khác chart ", _Symbol);
+      return;
+   }
+
+   // Cập nhật Martingale TP dựa trên lệnh vừa đóng
+
+   double lot = Lots;           // Lot cố định
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if (check == 0){
+      myTP = TP_Pips;
+      mySL = SL_Pips;    
+      Print(myTP);    
+   } // SL cố định
+   else{
+      myTP = myTP*2;
+      mySL = mySL; 
+      Print(myTP);       
+   }
+   if(action == "BUY")
+   {
+      CloseAllOrders();
+      trade.Buy(lot, _Symbol, 0, ask - mySL, ask + myTP, "TV Buy");
+   }
+   else if(action == "SELL")
+   {
+      CloseAllOrders();
+      trade.Sell(lot, _Symbol, 0, bid + mySL, bid - myTP, "TV Sell");
+   }
+   else if(action == "BUY_STOP" && IsNoPositionForSymbol(symbol))
+   {
+      DeletePendingBuyStop(symbol);
+      trade.BuyStop(lot, price, _Symbol, price - mySL, price + myTP, ORDER_TIME_GTC, 0, "TV BuyStop");
+   }
+   else if(action == "SELL_STOP" && IsNoPositionForSymbol(symbol))
+   {
+      DeletePendingSellStop(symbol);
+      trade.SellStop(lot, price, _Symbol, price + mySL, price - myTP, ORDER_TIME_GTC, 0, "TV SellStop");
+   }
+   else
+   {
+      Print("⚠️ Không hiểu ACTION: ", action);
+   }
+}
+
+//=== OnTick đọc file tín hiệu ===
+
+void OnTick()
+{
+   int handle = FileOpen(FileName, FILE_READ|FILE_TXT|FILE_SHARE_READ|FILE_ANSI);
+   if(handle != INVALID_HANDLE)
+   {
+      string line;
+      while(!FileIsEnding(handle))
+      {
+         line = FileReadString(handle);
+         if(line != "")
+         {
+            ProcessSignal(line);
+         }
+      }
+      FileClose(handle);
+      
+      // Xóa nội dung file sau khi xử lý để tránh nhồi lệnh
+      int clear = FileOpen(FileName, FILE_WRITE|FILE_TXT);
+      if(clear != INVALID_HANDLE)
+      {
+         FileWrite(clear, "");
+         FileClose(clear);
+      }
+   }
+}

@@ -1,0 +1,154 @@
+#property strict
+#include <Trade/Trade.mqh>
+#include <Trade/PositionInfo.mqh>
+CPositionInfo m_position;
+CTrade trade;
+
+input string FileName = "signals.txt";   // File chứa tín hiệu
+input double Lots     = 0.1;             // Lot mặc định
+input double TP       = 0;               // TP mặc định (0 = không TP)
+input double SL       = 0;               // SL mặc định (0 = không SL)
+
+//=== Hàm Trim xóa khoảng trắng ===
+string Trim(string s)
+{
+   StringTrimLeft(s);
+   StringTrimRight(s);
+   return s;
+}
+void WriteCheck(string action)
+{
+    int handle = FileOpen("check.txt", FILE_WRITE|FILE_TXT|FILE_ANSI);
+    if(handle != INVALID_HANDLE)
+    {
+        FileWrite(handle, action);  // ghi BUY hoặc SELL
+        FileClose(handle);
+    }
+    else
+    {
+        Print("❌ Lỗi mở file check.txt để ghi");
+    }
+}
+string ReadCheck()
+{
+    string result = "";
+    int handle = FileOpen("check.txt", FILE_READ|FILE_TXT|FILE_ANSI);
+    if(handle != INVALID_HANDLE)
+    {
+        if(!FileIsEnding(handle))
+            result = FileReadString(handle); // đọc 1 dòng
+        FileClose(handle);
+    }
+    else
+    {
+        Print("❌ Lỗi mở file check.txt để đọc");
+    }
+    return result;
+}
+void CloseAllOrders()
+{
+   int total = PositionsTotal();
+   for(int i = total-1; i >= 0; i--)
+   {
+      if(m_position.SelectByIndex(i))
+      {
+         string sym   = m_position.Symbol();
+         ulong  ticket= m_position.Ticket();
+         double volume= m_position.Volume();
+
+         if(sym == _Symbol)
+         {
+            Print("🔻 Đóng lệnh ticket=", ticket, " vol=", volume);
+
+            // MT5 Hedging → đóng từng lệnh
+            if(!trade.PositionClosePartial(ticket, volume))
+            {
+               Print("❌ Lỗi đóng ticket=", ticket,
+                     " code=", GetLastError());
+            }
+         }
+      }
+   }
+}
+
+
+//=== Hàm xử lý text tín hiệu ===
+void ProcessSignal(string text)
+{
+   Print("📩 Nhận tín hiệu: ", text);
+   text = Trim(text);
+
+   string action = "";
+   string symbol = "";
+
+   // Xác định BUY/SELL
+   if(StringFind(text, "BUY") != -1)  action = "BUY";
+   if(StringFind(text, "SELL") != -1) action = "SELL";
+
+   // Lấy symbol (ví dụ BTCUSD)
+   if(StringFind(text, "BTCUSD") != -1) symbol = "BTCUSD";
+   if(StringFind(text, "EURUSD") != -1) symbol = "EURUSD";
+   if(StringFind(text, "XAUUSD") != -1) symbol = "XAUUSD";
+   // 👉 Thêm các cặp khác nếu bạn muốn
+   Print(action);
+   if(symbol == "" || action == "")
+   {
+      Print("⚠️ Không nhận diện được symbol hoặc action trong text");
+      return;
+   }
+
+   // Check có đúng chart không
+   if(symbol != _Symbol)
+   {
+      Print("⚠️ Bỏ qua tín hiệu vì symbol=", symbol, " khác chart=", _Symbol);
+      return;
+   }
+
+   // Nếu BUY
+   if(action == "BUY")
+   {
+      long type = PositionGetInteger(POSITION_TYPE);
+      Print(type);
+      if(ReadCheck() == "SELL" && PositionSelect(_Symbol)){
+         CloseAllOrders();
+      }
+      trade.Buy(Lots, _Symbol, 0, SL, TP, "TV BUY");
+      WriteCheck("BUY");
+   }
+   // Nếu SELL
+   else if(action == "SELL")
+   {
+      long type = PositionGetInteger(POSITION_TYPE);
+      Print(type);
+      if(ReadCheck()=="BUY" && PositionSelect(_Symbol)){
+         CloseAllOrders();
+      }
+      trade.Sell(Lots, _Symbol, 0, SL, TP, "TV SELL");
+      WriteCheck("SELL");
+   }
+}
+
+//=== OnTick đọc file tín hiệu ===
+void OnTick()
+{
+   int handle = FileOpen(FileName, FILE_READ|FILE_TXT|FILE_SHARE_READ|FILE_ANSI);
+   if(handle != INVALID_HANDLE)
+   {
+      string line;
+      while(!FileIsEnding(handle))
+      {
+         line = FileReadString(handle);
+         if(line != "")
+            ProcessSignal(line);
+      }
+      FileClose(handle);
+
+      // Xóa nội dung file sau khi xử lý
+      int clear = FileOpen(FileName, FILE_WRITE|FILE_TXT);
+      if(clear != INVALID_HANDLE)
+      {
+         FileWrite(clear, "");
+         FileClose(clear);
+      }
+   }
+}

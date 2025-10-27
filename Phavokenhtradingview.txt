@@ -1,0 +1,25 @@
+//@version=6
+strategy("ChannelBreakOutStrategyWithWebhook", overlay=true, margin_long=100, margin_short=100)
+
+// === Input ===
+length = input.int(title="Length", minval=1, maxval=1000, defval=6)
+symbolName = syminfo.ticker
+
+// === Tính kênh ===
+upBound   = ta.highest(high, length)
+downBound = ta.lowest(low, length)
+plot(upBound, color=color.green, title="Upper Bound")
+plot(downBound, color=color.red, title="Lower Bound")
+var int check = 1
+if check == 1
+	if high >= upBound
+		json = '{"ACTION":"BUY","SYMBOL":"' + symbolName + '","PRICE":"' + str.tostring(high, format.mintick) + '"}'
+        alert(json, alert.freq_all)
+		label.new(bar_index, high,"BUY",style = label.style_label_up,color = color.new(color.green, 0),textcolor = color.white,size = size.normal)		
+		check :=0
+if check == 0
+	if low <= downBound
+		json = '{"ACTION":"SELL","SYMBOL":"' + symbolName + '","PRICE":"' + str.tostring(low, format.mintick) + '"}'
+        alert(json, alert.freq_all)
+		label.new(bar_index,low,"SELL",style = label.style_label_down,color = color.new(color.red, 0),textcolor = color.white,size = size.normal)
+		check:=1
