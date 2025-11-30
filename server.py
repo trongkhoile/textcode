@@ -4,27 +4,27 @@ import os
 
 app = Flask(__name__)
 
-# Đặt đường dẫn tuyệt đối cho file chính
 SIGNAL_FILE = "signals.txt"
-# File tạm để ghi an toàn
 TEMP_FILE = SIGNAL_FILE + ".tmp"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # Lấy dữ liệu JSON từ TradingView
-        data = request.get_json(force=True)  # ép đọc JSON dù header có sai
+        data = request.get_json(force=True)
         if not data:
             return jsonify({"status": "fail", "message": "Empty JSON"}), 400
 
         print("📩 Nhận tín hiệu JSON từ TradingView:")
         print(json.dumps(data, indent=2, ensure_ascii=False))
 
+        # ⭐️ THAY ĐỔI: Dùng encoding="utf-8"
         # Ghi JSON vào file tạm
-        with open(TEMP_FILE, "w", encoding="utf-16") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        with open(TEMP_FILE, "w", encoding="utf-8") as f:
+            # Ghi JSON và thêm ký tự xuống dòng (\n) để phân biệt tín hiệu
+            json_string = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+            f.write(json_string + '\n') 
 
-        # Đổi tên file tạm thành file chính
+        # Đổi tên file tạm thành file chính (Atomic write)
         os.replace(TEMP_FILE, SIGNAL_FILE)
 
         return jsonify({"status": "ok"})
@@ -36,4 +36,3 @@ def webhook():
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=80)
- 
